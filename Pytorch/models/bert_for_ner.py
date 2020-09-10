@@ -34,8 +34,8 @@ class BertOneStageForNer(BertPreTrainedModel):
         self.cls = nn.Linear(config.hidden_size, config.num_labels)
         self.init_weights()
 
-    def forward(self,input_ids, token_type_ids=None, attention_mask=None,labels=None):
-        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
+    def forward(self,input_ids, attention_mask=None,labels=None):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         sequence_output = outputs[0]
         sequence_output = self.dropout(sequence_output)
         logits = self.cls(sequence_output)
@@ -63,8 +63,8 @@ class BertCrfTwoStageForNer(BertPreTrainedModel):
         self.crf = CRF(num_tags=config.num_labels,batch_first=True)
         self.init_weights()
 
-    def forward(self,input_ids, token_type_ids=None, attention_mask=None,bio_labels=None,att_labels=None):
-        outputs = self.bert(input_ids = input_ids,attention_mask=attention_mask,token_type_ids=token_type_ids)
+    def forward(self,input_ids, attention_mask=None,bio_labels=None,att_labels=None):
+        outputs = self.bert(input_ids = input_ids,attention_mask=attention_mask)
         sequence_output = outputs[0]
         sequence_output = self.dropout(sequence_output)
         bio_logits = self.cls_bio(sequence_output)
