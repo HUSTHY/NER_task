@@ -1,1 +1,1 @@
-python run_bert_crf_two_stage_ner.py
+python -W ignore run_bert_crf_two_stage_ner.py

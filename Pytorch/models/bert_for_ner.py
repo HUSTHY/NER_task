@@ -4,6 +4,7 @@ from .crf import CRF
 from transformers.modeling_bert import BertPreTrainedModel
 from transformers.modeling_bert import BertModel
 from torch.nn import CrossEntropyLoss
+import time
 
 class BertCrfOneStageForNer(BertPreTrainedModel):
     def __init__(self,config):
@@ -58,21 +59,24 @@ class BertCrfTwoStageForNer(BertPreTrainedModel):
         super(BertCrfTwoStageForNer,self).__init__(config)
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.cls_bio = nn.Linear(config.hidden_size,config.bio_num_labels)
+        self.cls_bieso = nn.Linear(config.hidden_size,config.bieso_num_labels)
         self.cls_att = nn.Linear(config.hidden_size, config.att_num_labels)
-        self.crf = CRF(num_tags=config.num_labels,batch_first=True)
+        self.crf_bieso = CRF(num_tags=config.bieso_num_labels,batch_first=True)
+        self.crf_att = CRF(num_tags=config.att_num_labels, batch_first=True)
         self.init_weights()
 
-    def forward(self,input_ids, attention_mask=None,bio_labels=None,att_labels=None):
+    def forward(self,input_ids, attention_mask=None,bieso_labels=None,att_labels=None):
         outputs = self.bert(input_ids = input_ids,attention_mask=attention_mask)
         sequence_output = outputs[0]
         sequence_output = self.dropout(sequence_output)
-        bio_logits = self.cls_bio(sequence_output)
+        bieso_logits = self.cls_bieso(sequence_output)
         att_logits = self.cls_att(sequence_output)
-        outputs = (bio_logits,att_logits)
-        if bio_labels is not None and att_labels is not None:
-            bio_loss = self.crf(emissions = bio_logits, tags=bio_labels, mask=attention_mask)
-            att_loss = self.crf(emissions = att_logits, tags=att_labels, mask=attention_mask)
-            loss = bio_loss + att_loss
+
+        outputs = (bieso_logits,att_logits)
+
+        if bieso_labels is not None and att_labels is not None:
+            bieso_loss = self.crf_bieso(emissions = bieso_logits, tags=bieso_labels, mask=attention_mask) #这里报错了
+            att_loss = self.crf_att(emissions = att_logits, tags=att_labels, mask=attention_mask)
+            loss = bieso_loss + att_loss
             outputs = (-1*loss,)+outputs
         return outputs  # (loss), scores

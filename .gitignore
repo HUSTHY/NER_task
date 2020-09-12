@@ -1,0 +1,16 @@
+/Pytorch/datasets/oringal_data/dev.json
+/Pytorch/datasets/oringal_data/test.json
+/Pytorch/datasets/oringal_data/train.json
+/Pytorch/datasets/two_stage_data/dev_attris.txt
+/Pytorch/datasets/two_stage_data/dev_text.txt
+/Pytorch/datasets/two_stage_data/dev_bios.txt
+/Pytorch/datasets/two_stage_data/train_attris.txt
+/Pytorch/datasets/two_stage_data/train_bios.txt
+/Pytorch/datasets/two_stage_data/train_text.txt
+/Pytorch/pre_train_model/
+/Pytorch/datasets/two_stage_data/test_text.txt
+/Pytorch/datasets/two_stage_data/cached_dev
+/Pytorch/datasets/two_stage_data/cached_test
+/Pytorch/datasets/two_stage_data/cached_train
+/Pytorch/datasets/two_stage_data/dev_bieso.txt
+/Pytorch/datasets/two_stage_data/train_bieso.txt
