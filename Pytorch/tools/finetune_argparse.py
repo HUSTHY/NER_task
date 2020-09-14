@@ -5,7 +5,7 @@ def get_argparse():
     parser.add_argument('--max_sentence_length', type=int, default=50)
     parser.add_argument('--bert_model_path', type=str, default='pre_train_model/roberta')
     parser.add_argument('--data_dir', type=str, default='datasets/two_stage_data')
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument("--learning_rate", default=5e-5, type=float,help="The initial learning rate for Adam.")
     parser.add_argument("--crf_learning_rate", default=5e-5, type=float,help="The initial learning rate for crf and linear layer.")
     parser.add_argument("--weight_decay", default=0.01, type=float,help="Weight decay if we apply some.")

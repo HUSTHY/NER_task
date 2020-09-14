@@ -1,4 +1,3 @@
-import argparse
 from datasetReader.DatasetReader import TwostageDataReader
 from models.bert_for_ner import BertCrfTwoStageForNer
 from transformers import BertConfig
@@ -6,6 +5,8 @@ from torch.utils.data import DataLoader,RandomSampler
 from torch import optim
 from tools.finetune_argparse import get_argparse
 from tqdm import tqdm
+import torch
+import  time
 
 
 def train(model,train_data,dev_data,args):
@@ -54,28 +55,175 @@ def train(model,train_data,dev_data,args):
        correct = 0
        total = 0
        global_step = 0
-
-
        model.to(args.device)
        model.train()
        for epoch in tqdm(range(args.epochs),desc='Epoch'):
-              for step,batch in enumerate(tqdm(train_dataloader,desc='Iteraction')):
-                     optimizer.zero_grad()
-                     batch = tuple(t.to(args.device) for t in batch)
-                     inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bieso_labels': batch[2],
-                               'att_labels': batch[3]}
-                     outputs = model(**inputs)
+           total_loss = 0
+           for step,batch in  enumerate(tqdm(train_dataloader,desc='Iteraction')):
+               optimizer.zero_grad()
+               batch = tuple(t.to(args.device) for t in batch)
+               inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bieso_labels': batch[2],
+                         'att_labels': batch[3]}
+               outputs = model(**inputs)
+               loss = outputs[0]
+               loss.backward()
+               optimizer.step()
+               global_step += 1
+               total_loss += loss
+           train_loss = total_loss.item()/len(train_dataloader)
+           print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
+           dev_acc, dev_loss = evaluate(model,dev_data,args)
+           print('Dev Acc:{.4f}%,dev_loss:{:.6f}'.format( dev_acc*100, dev_loss))
 
 
-                     loss = outputs[0]
-                     loss.backward()
-                     optimizer.step()
-                     global_step += 1
 
-                     biesos_logits,att_logits = outputs[1],outputs[2]
 
-                     biesos_tag,att_tag = model.crf_bieso.decode(biesos_logits,inputs['attention_mask']),model.crf_att.decode(att_logits,inputs['attention_mask'])
 
+
+def evaluate(model,dev_data,args):
+    # dev_sampler = RandomSampler(dev_data)
+    # dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.batch_size)
+    dev_dataloader = DataLoader(dev_data, shuffle = False,batch_size=args.batch_size)
+    model.eval()
+    loss_total = 0
+    with torch.no_grad():
+        correct = 0
+        total = 0
+        for step, batch in enumerate(tqdm(dev_dataloader, desc='dev iteration:')):
+            batch = tuple(t.to(args.device) for t in batch)
+            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bieso_labels': batch[2],
+                      'att_labels': batch[3]}
+            outputs = model(**inputs)
+            loss, biesos_logits, att_logits = outputs[0], outputs[1], outputs[2]
+            biesos_tags, att_tags = model.crf_bieso.decode(biesos_logits,
+                                                           inputs['attention_mask']), model.crf_att.decode(att_logits,
+                                                                                                           inputs[
+                                                                                                               'attention_mask'])
+            biesos_tags, att_tags = biesos_tags.squeeze(0).cpu().numpy().tolist(), att_tags.squeeze(
+                0).cpu().numpy().tolist()
+            attention_masks = inputs['attention_mask'].cpu().numpy().tolist()
+            bieso_labels, att_labels = inputs['bieso_labels'].cpu().numpy().tolist(), inputs[
+                'att_labels'].cpu().numpy().tolist()
+
+            batch_total,batch_correct = compute_metrics(bieso_labels, att_labels, biesos_tags, att_tags, attention_masks)
+            correct += batch_correct
+            total += batch_total
+            loss_total  += loss
+
+    loss_mean = loss_total.item()/len(dev_dataloader)
+    acc = correct/total
+
+    print('loss_mean',loss_mean)
+    print('acc',acc)
+    return acc,loss_mean
+
+def compute_metrics(bieso_labels,att_labels,biesos_tags, att_tags,attention_masks):
+       """
+       这里传入的都是list，每一个list的元素是一个list，第一维list的长度是batch_size;第二维的list是max_sequence
+       Args:
+              bieso_labels:
+              att_labels:
+              biesos_tag:
+              att_tag:
+              attention_mask:
+       Returns:
+       """
+       batch_total = 0
+       batch_correct = 0
+       #for 循环对每一条数据做统计
+       for bieso_label,att_label,biesos_tag,att_tag,attention_mask in zip(bieso_labels,att_labels,biesos_tags, att_tags,attention_masks):
+           seq_length = attention_mask.count(1)
+
+           bieso_ture_entites = []
+           bieso_pre_entites = []
+           att_ture_entites = []
+           att_pre_entites = []
+
+           bieso_ture_entite = []
+           bieso_pre_entite = []
+           att_ture_entite = []
+           att_pre_entite = []
+
+
+           # print('att_label',att_label[0:seq_length])
+           # print('bieso_label',bieso_label[0:seq_length])
+
+           for index in range(0, seq_length):
+               ture_att = att_label[index]
+               ture_bieso = bieso_label[index]
+               pre_att = att_tag[index]
+               pre_bieso = biesos_tag[index]
+               if ture_att != 0:
+                   if ture_att in att_ture_entite:
+                       att_ture_entite.append(ture_att)
+                       bieso_ture_entite.append(ture_bieso)
+
+                       att_pre_entite.append(pre_att)
+                       bieso_pre_entite.append(pre_bieso)
+
+                   else:
+                       if len(att_ture_entite) == 0:
+                           att_ture_entite.append(ture_att)
+                           bieso_ture_entite.append(ture_bieso)
+
+                           att_pre_entite.append(pre_att)
+                           bieso_pre_entite.append(pre_bieso)
+                       else:
+                           att_ture_entites.append(att_ture_entite)
+                           bieso_ture_entites.append(bieso_ture_entite)
+                           att_pre_entites.append(att_pre_entite)
+                           bieso_pre_entites.append(bieso_pre_entite)
+
+                           bieso_ture_entite = []
+                           bieso_pre_entite = []
+                           att_ture_entite = []
+                           att_pre_entite = []
+
+                           att_ture_entite.append(ture_att)
+                           bieso_ture_entite.append(ture_bieso)
+
+                           att_pre_entite.append(pre_att)
+                           bieso_pre_entite.append(pre_bieso)
+               else:
+                   if len(att_ture_entite)>0:
+                       att_ture_entites.append(att_ture_entite)
+                       bieso_ture_entites.append(bieso_ture_entite)
+                       att_pre_entites.append(att_pre_entite)
+                       bieso_pre_entites.append(bieso_pre_entite)
+
+                       bieso_ture_entite = []
+                       bieso_pre_entite = []
+                       att_ture_entite = []
+                       att_pre_entite = []
+               index += 1
+           if len(att_ture_entite)>0:
+               att_ture_entites.append(att_ture_entite)
+               bieso_ture_entites.append(bieso_ture_entite)
+               att_pre_entites.append(att_pre_entite)
+               bieso_pre_entites.append(bieso_pre_entite)
+
+           # print('att_ture_entites',att_ture_entites)
+           # print('att_pre_entites', att_pre_entites)
+           #
+           # print('bieso_ture_entites', bieso_ture_entites)
+           # print('bieso_pre_entites', bieso_pre_entites)
+
+
+           total = len(att_ture_entites)
+           correct = 0
+           for att_ture_entite,att_pre_entite,bieso_ture_entite,bieso_pre_entite in zip(att_ture_entites,att_pre_entites,bieso_ture_entites,bieso_pre_entites):
+               # print('att_ture_entite',att_ture_entite)
+               # print('att_pre_entite',att_pre_entite)
+               # print('bieso_ture_entite',bieso_ture_entite)
+               # print('bieso_pre_entite',bieso_pre_entite)
+               # time.sleep(5000)
+               if att_ture_entite == att_pre_entite and bieso_ture_entite == bieso_pre_entite:
+                   batch_correct += 1
+
+           batch_total += total
+           batch_correct += correct
+
+       return batch_total,batch_correct
 
 
 
@@ -83,9 +231,6 @@ def train(model,train_data,dev_data,args):
 
 
 def main():
-
-
-
        args = get_argparse().parse_args()
        print(args)
 
@@ -119,6 +264,7 @@ def main():
 
 if __name__ == '__main__':
        main()
+
 
 
 

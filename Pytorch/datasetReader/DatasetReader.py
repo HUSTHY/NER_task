@@ -6,6 +6,7 @@ import os
 import logging
 logger = logging.getLogger(__name__)
 from processors.util import file_read,bieso_label_to_id,atts_label_to_id
+import time
 
 class TwostageDataReader(Dataset):
     def __init__(self,args,text_file_name,bieso_file_name,atts_file_name,repeat = 1):
@@ -26,7 +27,6 @@ class TwostageDataReader(Dataset):
             text_file_path = os.path.join(data_dir,text_file_name)
             biesos_file_path = os.path.join(data_dir,bieso_file_name)
             atts_file_path = os.path.join(data_dir,atts_file_name)
-
             texts = file_read(text_file_path)
             bieso_labels = []
             att_labels = []
