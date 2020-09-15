@@ -14,3 +14,4 @@
 /Pytorch/datasets/two_stage_data/cached_train
 /Pytorch/datasets/two_stage_data/dev_bieso.txt
 /Pytorch/datasets/two_stage_data/train_bieso.txt
+/Pytorch/pre_train_model/

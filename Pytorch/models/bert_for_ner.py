@@ -61,6 +61,7 @@ class BertCrfTwoStageForNer(BertPreTrainedModel):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.cls_bieso = nn.Linear(config.hidden_size,config.bieso_num_labels)
         self.cls_att = nn.Linear(config.hidden_size, config.att_num_labels)
+        self.cls_dropout = nn.Dropout(config.cls_dropout)
         self.crf_bieso = CRF(num_tags=config.bieso_num_labels,batch_first=True)
         self.crf_att = CRF(num_tags=config.att_num_labels, batch_first=True)
         self.init_weights()
@@ -69,11 +70,11 @@ class BertCrfTwoStageForNer(BertPreTrainedModel):
         outputs = self.bert(input_ids = input_ids,attention_mask=attention_mask)
         sequence_output = outputs[0]
         sequence_output = self.dropout(sequence_output)
-        bieso_logits = self.cls_bieso(sequence_output)
-        att_logits = self.cls_att(sequence_output)
+        bieso_logits = self.cls_dropout(self.cls_bieso(sequence_output))
+        att_logits = self.cls_dropout(self.cls_att(sequence_output))
+
 
         outputs = (bieso_logits,att_logits)
-
         if bieso_labels is not None and att_labels is not None:
             bieso_loss = self.crf_bieso(emissions = bieso_logits, tags=bieso_labels, mask=attention_mask) #这里报错了
             att_loss = self.crf_att(emissions = att_logits, tags=att_labels, mask=attention_mask)

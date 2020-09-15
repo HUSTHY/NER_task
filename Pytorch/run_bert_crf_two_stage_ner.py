@@ -7,6 +7,7 @@ from tools.finetune_argparse import get_argparse
 from tqdm import tqdm
 import torch
 import  time
+from tools.warm_up import get_linear_schedule_with_warmup
 
 
 def train(model,train_data,dev_data,args):
@@ -47,33 +48,57 @@ def train(model,train_data,dev_data,args):
                'lr': args.crf_learning_rate}
        ]
 
+       t_total = len(train_dataloader)*args.epochs
+       args.warmup_steps = int(t_total * args.warmup_proportion)
        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate,eps=args.adam_epsilon )
-       early_stop_step = 20000
-       last_improve = 0  # 记录上次提升的step
-       flag = False  # 记录是否很久没有效果提升
+
+       scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,
+                                                   num_training_steps=t_total)
+       # early_stop_step = 20000
+       # last_improve = 0  # 记录上次提升的step
+       # flag = False  # 记录是否很久没有效果提升
        dev_best_acc = 0
-       correct = 0
-       total = 0
        global_step = 0
        model.to(args.device)
        model.train()
        for epoch in tqdm(range(args.epochs),desc='Epoch'):
            total_loss = 0
+           correct = 0
+           total = 0
            for step,batch in  enumerate(tqdm(train_dataloader,desc='Iteraction')):
                optimizer.zero_grad()
                batch = tuple(t.to(args.device) for t in batch)
-               inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bieso_labels': batch[2],
-                         'att_labels': batch[3]}
+               inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bieso_labels': batch[2],'att_labels': batch[3]}
                outputs = model(**inputs)
                loss = outputs[0]
                loss.backward()
                optimizer.step()
+               scheduler.step()  # Update learning rate schedule
                global_step += 1
                total_loss += loss
-           train_loss = total_loss.item()/len(train_dataloader)
-           print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
+
+
+               biesos_logits, att_logits = outputs[1], outputs[2]
+               biesos_tags, att_tags = model.crf_bieso.decode(biesos_logits,inputs['attention_mask']), model.crf_att.decode( att_logits, inputs['attention_mask'])
+               biesos_tags, att_tags = biesos_tags.squeeze(0).cpu().numpy().tolist(), att_tags.squeeze(0).cpu().numpy().tolist()
+               attention_masks = inputs['attention_mask'].cpu().numpy().tolist()
+               bieso_labels, att_labels = inputs['bieso_labels'].cpu().numpy().tolist(), inputs['att_labels'].cpu().numpy().tolist()
+               batch_total, batch_correct = compute_metrics(bieso_labels, att_labels, biesos_tags, att_tags, attention_masks)
+
+               correct += batch_correct
+               total += batch_total
+               train_acc = correct/total
+               if global_step%8 == 0 or global_step%len(train_dataloader) == 0:
+                   print('Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f}'.format(epoch, args.epochs,train_acc*100,correct,total,loss.item()))
+           # train_loss = total_loss.item()/len(train_dataloader)
+           # print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
            dev_acc, dev_loss = evaluate(model,dev_data,args)
-           print('Dev Acc:{.4f}%,dev_loss:{:.6f}'.format( dev_acc*100, dev_loss))
+
+           if dev_best_acc< dev_acc:
+               dev_best_acc = dev_acc
+               print('save model....')
+               torch.save(model,'outputs/BertCrfTwoStageNer_model/bertCrfTwoStageNer_model.bin')
+           print('Dev Acc:{:.4f}%,Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100, dev_best_acc * 100,dev_loss))
 
 
 
@@ -81,9 +106,8 @@ def train(model,train_data,dev_data,args):
 
 
 def evaluate(model,dev_data,args):
-    # dev_sampler = RandomSampler(dev_data)
-    # dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.batch_size)
-    dev_dataloader = DataLoader(dev_data, shuffle = False,batch_size=args.batch_size)
+    dev_sampler = RandomSampler(dev_data)
+    dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.batch_size)
     model.eval()
     loss_total = 0
     with torch.no_grad():
@@ -112,9 +136,6 @@ def evaluate(model,dev_data,args):
 
     loss_mean = loss_total.item()/len(dev_dataloader)
     acc = correct/total
-
-    print('loss_mean',loss_mean)
-    print('acc',acc)
     return acc,loss_mean
 
 def compute_metrics(bieso_labels,att_labels,biesos_tags, att_tags,attention_masks):
@@ -134,12 +155,12 @@ def compute_metrics(bieso_labels,att_labels,biesos_tags, att_tags,attention_mask
        for bieso_label,att_label,biesos_tag,att_tag,attention_mask in zip(bieso_labels,att_labels,biesos_tags, att_tags,attention_masks):
            seq_length = attention_mask.count(1)
 
-           bieso_ture_entites = []
+           bieso_ture_entites = []#保存每条数据所有的实体[[1,2,2,3],[1,3]]
            bieso_pre_entites = []
-           att_ture_entites = []
+           att_ture_entites = [] #[[7,7,7,7],[2,2,2]]
            att_pre_entites = []
 
-           bieso_ture_entite = []
+           bieso_ture_entite = []#保存每个实体对应的文字index
            bieso_pre_entite = []
            att_ture_entite = []
            att_pre_entite = []
@@ -148,8 +169,8 @@ def compute_metrics(bieso_labels,att_labels,biesos_tags, att_tags,attention_mask
            # print('att_label',att_label[0:seq_length])
            # print('bieso_label',bieso_label[0:seq_length])
 
-           for index in range(0, seq_length):
-               ture_att = att_label[index]
+           for index in range(0, seq_length): #把att_label中所有连续的非0的字符分组统计出来；
+               ture_att = att_label[index]   #以实体属性名称来确定其他的
                ture_bieso = bieso_label[index]
                pre_att = att_tag[index]
                pre_bieso = biesos_tag[index]
@@ -243,6 +264,7 @@ def main():
        config = BertConfig.from_pretrained(args.bert_model_path)
        config.bieso_num_labels = 5
        config.att_num_labels = vocab_len
+       config.cls_dropout = 0.5
 
        print(config)
 
