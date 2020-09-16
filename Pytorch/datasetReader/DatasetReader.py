@@ -5,7 +5,7 @@ from tqdm import tqdm
 import os
 import logging
 logger = logging.getLogger(__name__)
-from processors.util import file_read,bieso_label_to_id,atts_label_to_id
+from processors.util import file_read,bieso_label_to_id,atts_label_to_id,bios_label_to_id_one_stage
 import time
 
 class TwostageDataReader(Dataset):
@@ -118,14 +118,14 @@ class OneStageDataReader(Dataset):
             text_file_path = os.path.join(data_dir,text_file_name)
             biesos_file_path = os.path.join(data_dir,bieso_file_name)
             texts = file_read(text_file_path)
-            bieso_labels = []
+            biso_labels = []
             if os.path.exists(biesos_file_path):
-                biesos = file_read(biesos_file_path)
-                biesos_labelid = bieso_label_to_id(biesos,self.max_sentence_length)
-                for label in tqdm(biesos_labelid,desc='bieso_labels to tensor'):
+                bios = file_read(biesos_file_path)
+                vocab_bios_path = data_dir+'/vocab_bios_list.txt'
+                bios_labelid = bios_label_to_id_one_stage(bios,vocab_bios_path,self.max_sentence_length)
+                for label in tqdm(bios_labelid,desc='bieso_labels to tensor'):
                     label = torch.tensor(label,dtype=torch.long)
-                    bieso_labels.append(label)
-
+                    biso_labels.append(label)
             input_ids_list = []
             attention_mask_list = []
             for text in tqdm(texts,desc='text convert_into_indextokens_and_segment_id to tensor'):
@@ -137,8 +137,8 @@ class OneStageDataReader(Dataset):
                 input_ids_list.append(input_ids)
                 attention_mask_list.append(attention_mask)
 
-            if len(bieso_labels)>0:
-                for input_ids,attention_mask,bieso_label in zip(input_ids_list,attention_mask_list,bieso_labels):
+            if len(biso_labels)>0:
+                for input_ids,attention_mask,bieso_label in zip(input_ids_list,attention_mask_list,biso_labels):
                     process_data_list.append((input_ids,attention_mask,bieso_label))
             else:
                 for input_ids,attention_mask in zip(input_ids_list,attention_mask_list):
@@ -173,5 +173,5 @@ class OneStageDataReader(Dataset):
     def __getitem__(self, item):
         input_ids = self.process_data_list[item][0]
         attention_mask = self.process_data_list[item][1]
-        bieso_label = self.process_data_list[item][2]
-        return input_ids,attention_mask,bieso_label
+        biso_label = self.process_data_list[item][2]
+        return input_ids,attention_mask,biso_label

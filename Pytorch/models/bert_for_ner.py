@@ -11,8 +11,8 @@ class BertCrfOneStageForNer(BertPreTrainedModel):
         super(BertCrfOneStageForNer,self).__init__(config)
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.cls = nn.Linear(config.hidden_size,config.num_labels)
-        self.crf = CRF(num_tags=config.num_labels,batch_first=True)
+        self.cls = nn.Linear(config.hidden_size,config.biso_num_labels)
+        self.crf = CRF(num_tags=config.biso_num_labels,batch_first=True)
         self.init_weights()
 
     def forward(self,input_ids, token_type_ids=None, attention_mask=None,labels=None):

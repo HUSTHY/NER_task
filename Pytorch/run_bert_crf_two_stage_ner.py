@@ -3,7 +3,7 @@ from models.bert_for_ner import BertCrfTwoStageForNer
 from transformers import BertConfig
 from torch.utils.data import DataLoader,RandomSampler
 from torch import optim
-from tools.finetune_argparse import get_argparse
+from tools.finetune_argparse import get_argparse_two_stage
 from tqdm import tqdm
 import torch
 import  time
@@ -14,6 +14,7 @@ def train(model,train_data,dev_data,args):
        train_sampler = RandomSampler(train_data)
        train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
        no_decay = ["bias", "LayerNorm.weight"]
+
        bert_param_optimizer = list(model.bert.named_parameters())
        crf_bieso_param_optimizer = list(model.crf_bieso.named_parameters())
        crf_att_param_optimizer = list(model.crf_att.named_parameters())
@@ -32,28 +33,22 @@ def train(model,train_data,dev_data,args):
        # print('linear_param_optimizer',len(linear_param_optimizer))
 
        optimizer_grouped_parameters = [
-              {'params': [p for n, p in bert_param_optimizer if not any(nd in n for nd in no_decay)],
-               'weight_decay': args.weight_decay, 'lr': args.learning_rate},
-              {'params': [p for n, p in bert_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
-               'lr': args.learning_rate},
+              {'params': [p for n, p in bert_param_optimizer if not any(nd in n for nd in no_decay)],'weight_decay': args.weight_decay, 'lr': args.learning_rate},
+              {'params': [p for n, p in bert_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,'lr': args.learning_rate},
 
-              {'params': [p for n, p in crf_param_optimizer if not any(nd in n for nd in no_decay)],
-               'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
-              {'params': [p for n, p in crf_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
-               'lr': args.crf_learning_rate},
+              {'params': [p for n, p in crf_param_optimizer if not any(nd in n for nd in no_decay)],'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
+              {'params': [p for n, p in crf_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,'lr': args.crf_learning_rate},
 
-              {'params': [p for n, p in linear_param_optimizer if not any(nd in n for nd in no_decay)],
-               'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
-              {'params': [p for n, p in linear_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
-               'lr': args.crf_learning_rate}
+              {'params': [p for n, p in linear_param_optimizer if not any(nd in n for nd in no_decay)],'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
+              {'params': [p for n, p in linear_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,'lr': args.crf_learning_rate}
        ]
 
        t_total = len(train_dataloader)*args.epochs
        args.warmup_steps = int(t_total * args.warmup_proportion)
        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate,eps=args.adam_epsilon )
 
-       scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,
-                                                   num_training_steps=t_total)
+       scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
+
        # early_stop_step = 20000
        # last_improve = 0  # 记录上次提升的step
        # flag = False  # 记录是否很久没有效果提升
@@ -77,7 +72,6 @@ def train(model,train_data,dev_data,args):
                global_step += 1
                total_loss += loss
 
-
                biesos_logits, att_logits = outputs[1], outputs[2]
                biesos_tags, att_tags = model.crf_bieso.decode(biesos_logits,inputs['attention_mask']), model.crf_att.decode( att_logits, inputs['attention_mask'])
                biesos_tags, att_tags = biesos_tags.squeeze(0).cpu().numpy().tolist(), att_tags.squeeze(0).cpu().numpy().tolist()
@@ -88,7 +82,10 @@ def train(model,train_data,dev_data,args):
                correct += batch_correct
                total += batch_total
                train_acc = correct/total
-               if global_step%8 == 0 or global_step%len(train_dataloader) == 0:
+
+               lr = scheduler.get_lr()
+               if global_step%64 == 0 or global_step%len(train_dataloader) == 0:
+                   print('lr', lr)
                    print('Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f}'.format(epoch, args.epochs,train_acc*100,correct,total,loss.item()))
            # train_loss = total_loss.item()/len(train_dataloader)
            # print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
@@ -99,9 +96,6 @@ def train(model,train_data,dev_data,args):
                print('save model....')
                torch.save(model,'outputs/BertCrfTwoStageNer_model/bertCrfTwoStageNer_model.bin')
            print('Dev Acc:{:.4f}%,Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100, dev_best_acc * 100,dev_loss))
-
-
-
 
 
 
@@ -252,7 +246,7 @@ def compute_metrics(bieso_labels,att_labels,biesos_tags, att_tags,attention_mask
 
 
 def main():
-       args = get_argparse().parse_args()
+       args = get_argparse_two_stage().parse_args()
        print(args)
 
        vocab_att_path = args.data_dir + '/vocab_attr_list.txt'
@@ -278,10 +272,6 @@ def main():
                                       atts_file_name='test_attris.txt')
 
        train(model,train_data,dev_data,args)
-
-
-
-
 
 
 if __name__ == '__main__':
