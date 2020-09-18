@@ -16,13 +16,9 @@ def train(model,train_data,dev_data,args):
        no_decay = ["bias", "LayerNorm.weight"]
 
        bert_param_optimizer = list(model.bert.named_parameters())
-       crf_bieso_param_optimizer = list(model.crf_bieso.named_parameters())
-       crf_att_param_optimizer = list(model.crf_att.named_parameters())
-       crf_param_optimizer = crf_bieso_param_optimizer+crf_att_param_optimizer
+       crf_param_optimizer = list(model.crf.named_parameters())
+       linear_param_optimizer = list(model.cls.named_parameters())
 
-       cls_bieso_linear_param_optimizer = list(model.cls_bieso.named_parameters())
-       cls_att_linear_param_optimizer = list(model.cls_att.named_parameters())
-       linear_param_optimizer = cls_bieso_linear_param_optimizer+cls_att_linear_param_optimizer
 
        # print('bert_param_optimizer',len(bert_param_optimizer))
        # print('crf_bieso_param_optimizer',len(crf_bieso_param_optimizer))
@@ -62,7 +58,7 @@ def train(model,train_data,dev_data,args):
            for step,batch in  enumerate(tqdm(train_dataloader,desc='Iteraction')):
                optimizer.zero_grad()
                batch = tuple(t.to(args.device) for t in batch)
-               inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bieso_labels': batch[2],'att_labels': batch[3]}
+               inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bio_labels': batch[2]}
                outputs = model(**inputs)
                loss = outputs[0]
                loss.backward()
@@ -72,15 +68,15 @@ def train(model,train_data,dev_data,args):
                total_loss += loss
 
                biesos_logits = outputs[1]
-               biesos_tags = model.crf_bieso.decode(biesos_logits,inputs['attention_mask'])
+               biesos_tags = model.crf.decode(biesos_logits,inputs['attention_mask'])
                biesos_tags = biesos_tags.squeeze(0).cpu().numpy().tolist()
-               bieso_labels = inputs['bieso_labels'].cpu().numpy().tolist()
+               bieso_labels = inputs['bio_labels'].cpu().numpy().tolist()
                batch_total, batch_correct = compute_metrics(bieso_labels, biesos_tags,args)
 
                correct += batch_correct
                total += batch_total
                train_acc = correct/total
-               if global_step%8 == 0 or global_step%len(train_dataloader) == 0:
+               if global_step%128 == 0 or global_step%len(train_dataloader) == 0:
                    print('Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f}'.format(epoch, args.epochs,train_acc*100,correct,total,loss.item()))
            # train_loss = total_loss.item()/len(train_dataloader)
            # print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
@@ -89,7 +85,7 @@ def train(model,train_data,dev_data,args):
            if dev_best_acc< dev_acc:
                dev_best_acc = dev_acc
                print('save model....')
-               torch.save(model,'outputs/BertCrfTwoStageNer_model/bertCrfTwoStageNer_model.bin')
+               torch.save(model,'outputs/BertCrfOneStageNer_model/bertCrfOneStageNer_model.bin')
            print('Dev Acc:{:.4f}%,Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100, dev_best_acc * 100,dev_loss))
 
 
@@ -107,13 +103,12 @@ def evaluate(model,dev_data,args):
         total = 0
         for step, batch in enumerate(tqdm(dev_dataloader, desc='dev iteration:')):
             batch = tuple(t.to(args.device) for t in batch)
-            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bieso_labels': batch[2],
-                      'att_labels': batch[3]}
+            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bio_labels': batch[2],}
             outputs = model(**inputs)
             loss, biesos_logits = outputs[0], outputs[1]
-            biesos_tags = model.crf_bieso.decode(biesos_logits,inputs['attention_mask'])
+            biesos_tags = model.crf.decode(biesos_logits,inputs['attention_mask'])
             biesos_tags = biesos_tags.squeeze(0).cpu().numpy().tolist()
-            bieso_labels = inputs['bieso_labels'].cpu().numpy().tolist()
+            bieso_labels = inputs['bio_labels'].cpu().numpy().tolist()
 
             batch_total,batch_correct = compute_metrics(bieso_labels, biesos_tags,args)
             correct += batch_correct
@@ -138,9 +133,20 @@ def compute_metrics(bieso_labels,biesos_tags,args):
        for bieso_label,biesos_tag in zip(bieso_labels,biesos_tags):
            id2label = args.bios_id2label
            bieso_label = [id2label[id] for id in bieso_label]
-           biesos_tag = [biesos_tag[id] for id in biesos_tag]
+           biesos_tag = [id2label[id] for id in biesos_tag]
 
-           total,correct = get_entities(bieso_label,biesos_tag)
+           true_entities = get_entities(bieso_label)
+           time.sleep(5000)
+           pre_entities = get_entities(biesos_tag)
+
+           total = len(true_entities)
+
+           rights_entities = [pre_entitie for pre_entitie in pre_entities if pre_entitie in true_entities]
+
+           correct = len(rights_entities)
+
+
+
            batch_total += total
            batch_correct += correct
 
@@ -148,9 +154,42 @@ def compute_metrics(bieso_labels,biesos_tags,args):
 
 
 
-def get_entities(bieso_label,biesos_tag):
-    print("")
-
+def get_entities(bieso_label):
+    print('bieso_label',bieso_label)
+    chunks = []
+    chunk = [-1, -1, -1]
+    for index,tag in enumerate(bieso_label):
+        if tag.startswith("S_"):
+            if chunk[2] != -1:
+                chunks.append(chunk)
+            chunk =  [-1, -1, -1]
+            chunk[1] = index
+            chunk[2] = index
+            chunk[0] = tag.split('_')[1]
+            chunks.append(chunk)
+            chunk = [-1, -1, -1]
+        if tag.startswith("B_"):
+            print('tag', tag)
+            print('index', index)
+            if chunk[2] != -1:
+                chunks.append(chunk)
+            chunk = [-1, -1, -1]
+            chunk[1] = index
+            chunk[0] = tag.split('_')[1]
+        elif tag.startswith('I_') and chunk[1] != -1:
+            print('tag', tag)
+            print('index', index)
+            _type = tag.split('_')[1]
+            if _type == chunk[0]:
+                chunk[2] = index
+            if index == len(bieso_label)-1:
+                chunks.append(chunk)
+        else:
+            if chunk[2] != -1:
+                chunks.append(chunk)
+            chunk = [-1, -1, -1]
+    print('chunks',chunks)
+    return chunks
 
 
 

@@ -8,6 +8,7 @@ from tqdm import tqdm
 import torch
 import  time
 from tools.warm_up import get_linear_schedule_with_warmup
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 def train(model,train_data,dev_data,args):
@@ -47,7 +48,9 @@ def train(model,train_data,dev_data,args):
        args.warmup_steps = int(t_total * args.warmup_proportion)
        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate,eps=args.adam_epsilon )
 
-       scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
+       # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
+       scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=False, threshold=0.0001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
+
 
        # early_stop_step = 20000
        # last_improve = 0  # 记录上次提升的step
@@ -68,7 +71,6 @@ def train(model,train_data,dev_data,args):
                loss = outputs[0]
                loss.backward()
                optimizer.step()
-               scheduler.step()  # Update learning rate schedule
                global_step += 1
                total_loss += loss
 
@@ -83,19 +85,19 @@ def train(model,train_data,dev_data,args):
                total += batch_total
                train_acc = correct/total
 
-               lr = scheduler.get_lr()
-               if global_step%64 == 0 or global_step%len(train_dataloader) == 0:
-                   print('lr', lr)
-                   print('Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f}'.format(epoch, args.epochs,train_acc*100,correct,total,loss.item()))
+               # lr = scheduler.get_lr()
+               if global_step%128 == 0 or global_step%len(train_dataloader) == 0:
+                   bert_lr, crf_lr = optimizer.param_groups[0]['lr'],optimizer.param_groups[2]['lr']
+                   print('Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f},bert_lr:{}, crf_lr:{}'.format(epoch, args.epochs,train_acc*100,correct,total,loss.item(),bert_lr, crf_lr))
            # train_loss = total_loss.item()/len(train_dataloader)
            # print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
-           dev_acc, dev_loss = evaluate(model,dev_data,args)
-
+           dev_acc, dev_loss,dev_correct,dev_total = evaluate(model,dev_data,args)
            if dev_best_acc< dev_acc:
                dev_best_acc = dev_acc
                print('save model....')
                torch.save(model,'outputs/BertCrfTwoStageNer_model/bertCrfTwoStageNer_model.bin')
-           print('Dev Acc:{:.4f}%,Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100, dev_best_acc * 100,dev_loss))
+           print('Dev Acc:{:.4f}%,correct/total={}/{},Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100,dev_correct,dev_total,dev_best_acc * 100,dev_loss))
+           scheduler.step(dev_best_acc)  # Update learning rate schedule
 
 
 
@@ -130,7 +132,7 @@ def evaluate(model,dev_data,args):
 
     loss_mean = loss_total.item()/len(dev_dataloader)
     acc = correct/total
-    return acc,loss_mean
+    return acc,loss_mean,correct,total
 
 def compute_metrics(bieso_labels,att_labels,biesos_tags, att_tags,attention_masks):
        """
