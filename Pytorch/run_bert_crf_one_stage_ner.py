@@ -8,7 +8,7 @@ from tqdm import tqdm
 import torch
 import  time
 from tools.warm_up import get_linear_schedule_with_warmup
-
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 def train(model,train_data,dev_data,args):
        train_sampler = RandomSampler(train_data)
@@ -43,7 +43,10 @@ def train(model,train_data,dev_data,args):
        args.warmup_steps = int(t_total * args.warmup_proportion)
        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate,eps=args.adam_epsilon )
 
-       scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
+       # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
+       scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.8, patience=10, verbose=False, threshold=0.0001,
+                                     threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
+
        # early_stop_step = 20000
        # last_improve = 0  # 记录上次提升的step
        # flag = False  # 记录是否很久没有效果提升
@@ -63,7 +66,6 @@ def train(model,train_data,dev_data,args):
                loss = outputs[0]
                loss.backward()
                optimizer.step()
-               scheduler.step()  # Update learning rate schedule
                global_step += 1
                total_loss += loss
 
@@ -76,17 +78,20 @@ def train(model,train_data,dev_data,args):
                correct += batch_correct
                total += batch_total
                train_acc = correct/total
-               if global_step%128 == 0 or global_step%len(train_dataloader) == 0:
-                   print('Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f}'.format(epoch, args.epochs,train_acc*100,correct,total,loss.item()))
+               if global_step%64 == 0 or global_step%len(train_dataloader) == 0:
+                   bert_lr, crf_lr = optimizer.param_groups[0]['lr'], optimizer.param_groups[2]['lr']
+                   print(' Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f},bert_lr:{}, crf_lr:{}'.format( epoch, args.epochs, train_acc * 100, correct, total, loss.item(), bert_lr, crf_lr))
            # train_loss = total_loss.item()/len(train_dataloader)
            # print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
-           dev_acc, dev_loss = evaluate(model,dev_data,args)
+               if global_step % 320 == 0 or global_step % len(train_dataloader) == 0:
+                   dev_acc, dev_loss,dev_correct,dev_total = evaluate(model,dev_data,args)
 
-           if dev_best_acc< dev_acc:
-               dev_best_acc = dev_acc
-               print('save model....')
-               torch.save(model,'outputs/BertCrfOneStageNer_model/bertCrfOneStageNer_model.bin')
-           print('Dev Acc:{:.4f}%,Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100, dev_best_acc * 100,dev_loss))
+                   if dev_best_acc< dev_acc:
+                       dev_best_acc = dev_acc
+                       print('save model....')
+                       torch.save(model,'outputs/BertCrfOneStageNer_model/bertCrfOneStageNer_model.bin')
+                   print(' Dev Acc:{:.4f}%,correct/total={}/{},Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100,dev_correct,dev_total,dev_best_acc * 100,dev_loss))
+           scheduler.step(dev_best_acc)
 
 
 
@@ -117,7 +122,7 @@ def evaluate(model,dev_data,args):
 
     loss_mean = loss_total.item()/len(dev_dataloader)
     acc = correct/total
-    return acc,loss_mean
+    return acc,loss_mean,correct,total
 
 def compute_metrics(bieso_labels,biesos_tags,args):
        """
@@ -136,16 +141,16 @@ def compute_metrics(bieso_labels,biesos_tags,args):
            biesos_tag = [id2label[id] for id in biesos_tag]
 
            true_entities = get_entities(bieso_label)
-           time.sleep(5000)
            pre_entities = get_entities(biesos_tag)
+
+
+
 
            total = len(true_entities)
 
            rights_entities = [pre_entitie for pre_entitie in pre_entities if pre_entitie in true_entities]
 
            correct = len(rights_entities)
-
-
 
            batch_total += total
            batch_correct += correct
@@ -155,7 +160,7 @@ def compute_metrics(bieso_labels,biesos_tags,args):
 
 
 def get_entities(bieso_label):
-    print('bieso_label',bieso_label)
+    # print('bieso_label',bieso_label)
     chunks = []
     chunk = [-1, -1, -1]
     for index,tag in enumerate(bieso_label):
@@ -169,16 +174,12 @@ def get_entities(bieso_label):
             chunks.append(chunk)
             chunk = [-1, -1, -1]
         if tag.startswith("B_"):
-            print('tag', tag)
-            print('index', index)
             if chunk[2] != -1:
                 chunks.append(chunk)
             chunk = [-1, -1, -1]
             chunk[1] = index
             chunk[0] = tag.split('_')[1]
         elif tag.startswith('I_') and chunk[1] != -1:
-            print('tag', tag)
-            print('index', index)
             _type = tag.split('_')[1]
             if _type == chunk[0]:
                 chunk[2] = index
@@ -188,16 +189,20 @@ def get_entities(bieso_label):
             if chunk[2] != -1:
                 chunks.append(chunk)
             chunk = [-1, -1, -1]
-    print('chunks',chunks)
-    return chunks
+    # print('chunks',chunks)
+
+    per_names = []
+
+    for entity in chunks:
+        if 'name' == entity[0]:
+            per_names.append(entity)
+    return per_names
 
 
 
 
 def main():
        args = get_argparse_one_stage().parse_args()
-
-
        vocab_att_path = args.data_dir + '/vocab_bios_list.txt'
 
        with open(vocab_att_path,'r') as f:
