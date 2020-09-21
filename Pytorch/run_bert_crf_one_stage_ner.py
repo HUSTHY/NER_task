@@ -15,9 +15,9 @@ def train(model,train_data,dev_data,args):
        train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
        no_decay = ["bias", "LayerNorm.weight"]
 
-       bert_param_optimizer = list(model.bert.named_parameters())
-       crf_param_optimizer = list(model.crf.named_parameters())
-       linear_param_optimizer = list(model.cls.named_parameters())
+       bert_param_optimizer = model.bert.named_parameters()
+       crf_param_optimizer = model.crf.named_parameters()
+       linear_param_optimizer = model.cls.named_parameters()
 
 
        # print('bert_param_optimizer',len(bert_param_optimizer))
@@ -44,7 +44,7 @@ def train(model,train_data,dev_data,args):
        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate,eps=args.adam_epsilon )
 
        # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
-       scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.8, patience=10, verbose=False, threshold=0.0001,
+       scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20, verbose=False, threshold=0.0001,
                                      threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
 
        # early_stop_step = 20000
@@ -77,13 +77,16 @@ def train(model,train_data,dev_data,args):
 
                correct += batch_correct
                total += batch_total
-               train_acc = correct/total
-               if global_step%64 == 0 or global_step%len(train_dataloader) == 0:
+               if total > 0:
+                train_acc = correct/total
+               else:
+                   train_acc = 0
+               if global_step%8 == 0 :
                    bert_lr, crf_lr = optimizer.param_groups[0]['lr'], optimizer.param_groups[2]['lr']
                    print(' Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f},bert_lr:{}, crf_lr:{}'.format( epoch, args.epochs, train_acc * 100, correct, total, loss.item(), bert_lr, crf_lr))
            # train_loss = total_loss.item()/len(train_dataloader)
            # print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
-               if global_step % 320 == 0 or global_step % len(train_dataloader) == 0:
+               if global_step % 40 == 0 :
                    dev_acc, dev_loss,dev_correct,dev_total = evaluate(model,dev_data,args)
 
                    if dev_best_acc< dev_acc:
@@ -121,7 +124,10 @@ def evaluate(model,dev_data,args):
             loss_total  += loss
 
     loss_mean = loss_total.item()/len(dev_dataloader)
-    acc = correct/total
+    if total >0:
+        acc = correct/total
+    else:
+        acc = 0
     return acc,loss_mean,correct,total
 
 def compute_metrics(bieso_labels,biesos_tags,args):
@@ -212,7 +218,7 @@ def main():
        print('vocab_len',vocab_len)
        config = BertConfig.from_pretrained(args.bert_model_path)
        config.biso_num_labels = vocab_len
-       config.cls_dropout = 0.5
+       # config.cls_dropout = 0.5
        args.bios_id2label = { id:label for id,label in enumerate(bios)}
        print(args)
 
