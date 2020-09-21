@@ -34,22 +34,22 @@ class BertOneStageForNer(BertPreTrainedModel):
         self.cls = nn.Linear(config.hidden_size, config.num_labels)
         # self.init_weights()
 
-    def forward(self,input_ids, attention_mask=None,labels=None):
+    def forward(self,input_ids, attention_mask=None,bio_labels=None):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         sequence_output = outputs[0]
         sequence_output = self.dropout(sequence_output)
         logits = self.cls(sequence_output)
 
-        if labels is not  None:
+        if bio_labels is not  None:
             loss_fct = CrossEntropyLoss(ignore_index=0)
 
             if attention_mask is not None:
                 active_loss = attention_mask.view(-1) == 1
                 active_logits = logits.view(-1, self.num_labels)[active_loss]
-                active_labels = labels.view(-1)[active_loss]
+                active_labels = bio_labels.view(-1)[active_loss]
                 loss = loss_fct(active_logits,active_labels)
             else:
-                loss = loss_fct(logits.view(-1,self.num_labels),labels.view(-1))
+                loss = loss_fct(logits.view(-1,self.num_labels),bio_labels.view(-1))
             outputs = (loss,) + outputs
         return outputs
 

@@ -16,7 +16,6 @@ def train(model,train_data,dev_data,args):
        no_decay = ["bias", "LayerNorm.weight"]
 
        bert_param_optimizer = model.bert.named_parameters()
-       crf_param_optimizer = model.crf.named_parameters()
        linear_param_optimizer = model.cls.named_parameters()
 
 
@@ -31,9 +30,6 @@ def train(model,train_data,dev_data,args):
        optimizer_grouped_parameters = [
               {'params': [p for n, p in bert_param_optimizer if not any(nd in n for nd in no_decay)],'weight_decay': args.weight_decay, 'lr': args.learning_rate},
               {'params': [p for n, p in bert_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,'lr': args.learning_rate},
-
-              {'params': [p for n, p in crf_param_optimizer if not any(nd in n for nd in no_decay)],'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
-              {'params': [p for n, p in crf_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,'lr': args.crf_learning_rate},
 
               {'params': [p for n, p in linear_param_optimizer if not any(nd in n for nd in no_decay)],'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
               {'params': [p for n, p in linear_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,'lr': args.crf_learning_rate}
@@ -92,7 +88,7 @@ def train(model,train_data,dev_data,args):
                    if dev_best_acc< dev_acc:
                        dev_best_acc = dev_acc
                        print('save model....')
-                       torch.save(model,'outputs/BertCrfOneStageNer_model/bertCrfOneStageNer_model.bin')
+                       torch.save(model,'outputs/BertOneStageNer_model/BertOneStageNer_model.bin')
                    print(' Dev Acc:{:.4f}%,correct/total={}/{},Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100,dev_correct,dev_total,dev_best_acc * 100,dev_loss))
            scheduler.step(dev_best_acc)
 

@@ -1,0 +1,1 @@
+python -W ignore run_bert_one_stage_ner.py
