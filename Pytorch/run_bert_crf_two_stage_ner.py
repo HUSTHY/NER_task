@@ -64,13 +64,13 @@ def train(model,train_data,dev_data,args):
            correct = 0
            total = 0
            for step,batch in  enumerate(tqdm(train_dataloader,desc='Iteraction')):
-               optimizer.zero_grad()
                batch = tuple(t.to(args.device) for t in batch)
                inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bieso_labels': batch[2],'att_labels': batch[3]}
                outputs = model(**inputs)
                loss = outputs[0]
                loss.backward()
                optimizer.step()
+               model.zero_grad()
                global_step += 1
                total_loss += loss
 

@@ -43,9 +43,9 @@ def train(model,train_data,dev_data,args):
        args.warmup_steps = int(t_total * args.warmup_proportion)
        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate,eps=args.adam_epsilon )
 
-       # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
-       scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20, verbose=False, threshold=0.0001,
-                                     threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
+       scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
+       # scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20, verbose=False, threshold=0.0001,
+       #                               threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
 
        # early_stop_step = 20000
        # last_improve = 0  # 记录上次提升的step
@@ -59,13 +59,14 @@ def train(model,train_data,dev_data,args):
            correct = 0
            total = 0
            for step,batch in  enumerate(tqdm(train_dataloader,desc='Iteraction')):
-               optimizer.zero_grad()
                batch = tuple(t.to(args.device) for t in batch)
                inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bio_labels': batch[2]}
                outputs = model(**inputs)
                loss = outputs[0]
                loss.backward()
                optimizer.step()
+               scheduler.step()
+               model.zero_grad()
                global_step += 1
                total_loss += loss
 
@@ -77,6 +78,7 @@ def train(model,train_data,dev_data,args):
 
                correct += batch_correct
                total += batch_total
+
                if total > 0:
                 train_acc = correct/total
                else:
@@ -94,7 +96,7 @@ def train(model,train_data,dev_data,args):
                        print('save model....')
                        torch.save(model,'outputs/BertCrfOneStageNer_model/bertCrfOneStageNer_model.bin')
                    print(' Dev Acc:{:.4f}%,correct/total={}/{},Best_dev_acc:{:.4f}%,dev_loss:{:.6f}'.format(dev_acc * 100,dev_correct,dev_total,dev_best_acc * 100,dev_loss))
-           scheduler.step(dev_best_acc)
+           # scheduler.step(dev_best_acc)
 
 
 
