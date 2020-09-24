@@ -32,7 +32,7 @@ class BertOneStageForNer(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.cls = nn.Linear(config.hidden_size, config.biso_num_labels)
-        # self.init_weights()
+        self.init_weights()
 
     def forward(self,input_ids, attention_mask=None,bio_labels=None):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
@@ -47,8 +47,6 @@ class BertOneStageForNer(BertPreTrainedModel):
                 # active_logits = logits[active_loss]
                 # active_labels = bio_labels[active_loss]
                 # loss = loss_fct(active_logits, active_labels)
-
-
                 active_loss = attention_mask.view(-1) == 1
                 active_logits = logits.view(-1,self.num_labels)[active_loss]
                 active_labels = bio_labels.view(-1)[active_loss]

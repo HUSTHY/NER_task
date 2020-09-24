@@ -150,9 +150,10 @@ def main():
     vocab_att_list = list(set(vocab_att_list))
 
     with open('two_stage_data/vocab_attr_list.txt','w') as f:
-        f.write('NULL'+'\n')
+        f.write('X'+'\n')
         for attri in vocab_att_list:
             f.write(attri+'\n')
+        f.write('NULL' + '\n')
     statistics_text_length(dir_path)
 
 if __name__ == '__main__':

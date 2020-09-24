@@ -1,7 +1,7 @@
 from datasetReader.DatasetReader import OneStageDataReader
 from models.bert_for_ner import BertOneStageForNer
 from transformers import BertConfig
-from torch.utils.data import DataLoader,RandomSampler
+from torch.utils.data import DataLoader,RandomSampler,SequentialSampler
 from torch import optim
 from tools.finetune_argparse import get_argparse_bert_one_stage
 from tqdm import tqdm
@@ -37,9 +37,7 @@ def seed_everything(seed=1029):
 def train(model,train_data,dev_data,args):
        train_sampler = RandomSampler(train_data)
        train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
-       no_decay = ["bias", "LayerNorm.weight"]
 
-       bert_param_optimizer = model.bert.named_parameters()
 
        # print('bert_param_optimizer',len(bert_param_optimizer))
        # print('crf_bieso_param_optimizer',len(crf_bieso_param_optimizer))
@@ -49,10 +47,14 @@ def train(model,train_data,dev_data,args):
        # print('crf_param_optimizer',len(crf_param_optimizer))
        # print('linear_param_optimizer',len(linear_param_optimizer))
 
+
+       no_decay = ["bias", "LayerNorm.weight"]
        optimizer_grouped_parameters = [
-              {'params': [p for n, p in bert_param_optimizer if not any(nd in n for nd in no_decay)],'weight_decay': args.weight_decay, 'lr': args.learning_rate},
-              {'params': [p for n, p in bert_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,'lr': args.learning_rate}
+           {"params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": args.weight_decay, },
+           {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
        ]
+
        t_total = len(train_dataloader)*args.epochs
        args.warmup_steps = int(t_total * args.warmup_proportion)
        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate,eps=args.adam_epsilon )
@@ -60,8 +62,8 @@ def train(model,train_data,dev_data,args):
 
        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,num_training_steps=t_total)
 
-       # scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20, verbose=False, threshold=0.0001,
-       #                               threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
+       scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2, verbose=False, threshold=0.0001,
+                                     threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
 
        # early_stop_step = 20000
        # last_improve = 0  # 记录上次提升的step
@@ -73,7 +75,6 @@ def train(model,train_data,dev_data,args):
        model.train()
        for epoch in tqdm(range(args.epochs),desc='Epoch'):
            pbar = ProgressBar(n_total=len(train_dataloader), desc='Training Iteraction')
-
            total_loss = 0
            correct = 0
            total = 0
@@ -90,31 +91,32 @@ def train(model,train_data,dev_data,args):
                biesos_logits = outputs[1]
                biesos_tags = torch.argmax(biesos_logits, dim=2).cpu().numpy().tolist()
                bieso_labels = inputs['bio_labels'].cpu().numpy().tolist()
+               # if step%300 == 0 and step !=0:
+               #     print('biesos_tags', biesos_tags)
+               #     print('bieso_labels', bieso_labels)
                batch_total, batch_correct = compute_metrics(bieso_labels, biesos_tags,args)
-
                correct += batch_correct
                total += batch_total
 
-               scheduler.step()
-
                pbar(step,{"loss":loss.item()})
-
-
-               # if total > 0:
-               #  train_acc = correct/total
-               # else:
-               #     train_acc = 0
+               if total > 0:
+                train_acc = correct/total
+               else:
+                   train_acc = 0
                # if global_step%8 == 0 :
                #     bert_lr = optimizer.param_groups[0]['lr']
                #     print(' Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f},bert_lr:{}'.format( epoch, args.epochs, train_acc * 100, correct, total, loss.item(), bert_lr))
-           # train_loss = total_loss.item()/len(train_dataloader)
-           # print('Train Epoch[{}/{}]%,train_loss:{:.6f}'.format(epoch, args.epochs,train_loss))
+           train_loss = total_loss/len(train_dataloader)
+           print(' Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f}'.format(epoch,args.epochs,train_acc * 100, correct, total,loss.item()))
 
-           train_acc = correct / total
-           bert_lr = optimizer.param_groups[0]['lr']
-           train_loss = total_loss/ len(train_dataloader)
-           print(' Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f},bert_lr:{}'.format(epoch,args.epochs,train_acc * 100,correct, total,train_loss,bert_lr))
+
+
+           # train_acc = correct / total
+           # bert_lr = optimizer.param_groups[0]['lr']
+           # train_loss = total_loss/ len(train_dataloader)
+           # print(' Train Epoch[{}/{}],train_acc:{:.4f}%,correct/total={}/{},train_loss:{:.6f},bert_lr:{}'.format(epoch,args.epochs,train_acc * 100,correct, total,train_loss,bert_lr))
            dev_acc, dev_loss,dev_correct,dev_total = evaluate(model,dev_data,args)
+           scheduler.step(dev_best_acc)
            if dev_best_acc< dev_acc:
                dev_best_acc = dev_acc
                print('save model....')
@@ -126,7 +128,7 @@ def train(model,train_data,dev_data,args):
 
 
 def evaluate(model,dev_data,args):
-    dev_sampler = RandomSampler(dev_data)
+    dev_sampler = SequentialSampler(dev_data)
     dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.batch_size)
     model.eval()
     loss_total = 0
@@ -138,10 +140,13 @@ def evaluate(model,dev_data,args):
             inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bio_labels': batch[2],}
             outputs = model(**inputs)
             loss, biesos_logits = outputs[0], outputs[1]
-
-
             biesos_tags = torch.argmax(biesos_logits, dim=2).cpu().numpy().tolist()
+            # print('biesos_tags',biesos_tags)
+            biesos_tags = np.argmax(biesos_logits.cpu().numpy(), axis=2).tolist()
+            # print('biesos_tags', biesos_tags)
             bieso_labels = inputs['bio_labels'].cpu().numpy().tolist()
+            # print('bieso_labels',bieso_labels)
+
             batch_total,batch_correct = compute_metrics(bieso_labels, biesos_tags,args)
             correct += batch_correct
             total += batch_total
@@ -171,16 +176,12 @@ def compute_metrics(bieso_labels,biesos_tags,args):
            biesos_tag = [id2label[id] for id in biesos_tag]
            # print('bieso_label',bieso_label)
            # print('biesos_tag',biesos_tag)
-           # time.sleep(5000)
            true_entities = get_entities(bieso_label)
+           # print('*'*100)
            pre_entities = get_entities(biesos_tag)
-
            total = len(true_entities)
-
            rights_entities = [pre_entitie for pre_entitie in pre_entities if pre_entitie in true_entities]
-
            correct = len(rights_entities)
-
            batch_total += total
            batch_correct += correct
 
@@ -219,12 +220,14 @@ def get_entities(bieso_label):
                 chunks.append(chunk)
             chunk = [-1, -1, -1]
     # print('chunks',chunks)
-
     per_names = []
 
     for entity in chunks:
         if 'name' == entity[0]:
             per_names.append(entity)
+
+    # print('per_names',per_names)
+
     return per_names
 
 

@@ -22,7 +22,7 @@ def file_read(path):
 #     return biesos_labelid
 
 def bieso_label_to_id(biesos,max_sentence_length):
-    label_map = { label:id for id,label in enumerate(['O','B','I','S'])} #'O'放在第一位是为了后面labels padding好操作
+    label_map = { label:id for id,label in enumerate(['X','B','I','S','O'])} #'O'放在最后一位不能放在第一位
     biesos_labelid = []
     for bieso in tqdm(biesos,desc='biesos_label_to_id'):
         label = []
