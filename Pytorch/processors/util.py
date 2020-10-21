@@ -24,14 +24,16 @@ def file_read(path):
 def bieso_label_to_id(biesos,max_sentence_length):
     label_map = { label:id for id,label in enumerate(['X','B','I','S','O'])} #'O'放在最后一位不能放在第一位
     biesos_labelid = []
+    all_input_lens = []
     for bieso in tqdm(biesos,desc='biesos_label_to_id'):
         label = []
         for ele in bieso.split(' '):
             label.append(label_map[ele])
+        all_input_lens.append(len(label))
         label_padding = [0]*(max_sentence_length-len(label)) #做padding操作
         label.extend(label_padding)
         biesos_labelid.append(label)
-    return biesos_labelid
+    return biesos_labelid,all_input_lens
 
 
 def atts_label_to_id(atts,vocab_att_path,max_sentence_length):
@@ -57,11 +59,17 @@ def bios_label_to_id_one_stage(bios,vocab_bios_path,max_sentence_length):
     label_map = {label: id for id, label in enumerate(vocab_atts)}
 
     bios_labelid = []
+    all_input_lens = []
     for k in tqdm(bios, desc='biesos_label_to_id'):
         label = []
+        label.append(label_map['O'])
         for ele in k.split(' '):
             label.append(label_map[ele])
+        label.append(label_map['O'])
+        all_input_lens.append(len(label))
+        if len(label)> max_sentence_length:
+            label = label[0:max_sentence_length]
         label_padding = [0] * (max_sentence_length - len(label))  # 做padding操作
         label.extend(label_padding)
         bios_labelid.append(label)
-    return bios_labelid
+    return bios_labelid,all_input_lens

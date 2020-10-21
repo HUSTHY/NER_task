@@ -1,9 +1,9 @@
 from datasetReader.DatasetReader import OneStageDataReader
 from models.bert_for_ner import BertOneStageForNer
 from transformers import BertConfig
-from torch.utils.data import DataLoader,RandomSampler,SequentialSampler,TensorDataset
+from torch.utils.data import DataLoader,RandomSampler,SequentialSampler
 from torch import optim
-from tools.finetune_argparse import get_argparse_bert_one_stage
+from tools.finetune_argparse import get_argparse_bert_one_stage_bk
 from tools.adamw import AdamW
 from tqdm import tqdm
 import torch
@@ -12,17 +12,28 @@ from tools.warm_up import get_linear_schedule_with_warmup
 from tools.progressbar import ProgressBar
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-from processors.utils_ner import get_entities
-from processors.ner_seq import convert_examples_to_features
-from processors.ner_seq import ner_processors as processors
-from processors.ner_seq import collate_fn
-import logging
-from transformers import BertTokenizer
-
-
 import os
 import random
 import numpy as np
+
+
+
+
+
+
+"""
+这里NER采用Bert+分类器，也是直接使用一阶段的预测的方法，这里有几个细节的地方值得记录
+1、优化器、学习率以及学习率衰减的设置；
+2、序列数据的标注要准确，且标注的非实体类不能用0，这里要使用其他的数字别是非实体类别，因为Bert中有个padding需要用到0
+3、sequence的长度在不同的Batch中要动态调整，这里的实现就是collate_fn函数，每个batch取自己的最长的那个序列作为每个sequence的长度
+4、关于BertTokenizer中tokenizer.tokenize(text)的使用，数据集中含有中英文的情况，我们在做label的时候已经是安装每个汉字和每个字母做的标注
+，而tokenizer.tokenize(text)则会把text中的英文安装单词和单词的一份形如——CSOL处理为‘cs’和‘##ol’，而不是‘c’,'s','o','l'。这样就会
+造成这些数据的编码向量和labels向量对应不上
+"""
+
+
+
+
 
 def seed_everything(seed=42):
     '''
@@ -43,18 +54,18 @@ def seed_everything(seed=42):
 
 
 
-# def collate_fn(batch):
-#     """
-#     batch should be a list of (sequence, target, length) tuples...
-#     Returns a padded tensor of sequences sorted from longest to shortest,
-#     """
-#     all_input_ids, all_attention_mask, all_labels,input_lens = map(torch.stack, zip(*batch))
-#     max_len = max(input_lens).item()
-#     # print('max_len',max_len)
-#     all_input_ids = all_input_ids[:, :max_len]
-#     all_attention_mask = all_attention_mask[:, :max_len]
-#     all_labels = all_labels[:,:max_len]
-#     return all_input_ids, all_attention_mask, all_labels
+def collate_fn(batch):
+    """
+    batch should be a list of (sequence, target, length) tuples...
+    Returns a padded tensor of sequences sorted from longest to shortest,
+    """
+    all_input_ids, all_attention_mask, all_labels,input_lens = map(torch.stack, zip(*batch))
+    max_len = max(input_lens).item()
+    # print('max_len',max_len)
+    all_input_ids = all_input_ids[:, :max_len]
+    all_attention_mask = all_attention_mask[:, :max_len]
+    all_labels = all_labels[:,:max_len]
+    return all_input_ids, all_attention_mask, all_labels
 
 
 def train(model,train_data,dev_data,args):
@@ -106,7 +117,7 @@ def train(model,train_data,dev_data,args):
         for step, batch in enumerate(train_dataloader):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bio_labels': batch[3]}
+            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bio_labels': batch[2]}
             # print('input_ids',inputs['input_ids'])
             # print('input_ids',inputs['input_ids'].shape)
 
@@ -150,7 +161,6 @@ def train(model,train_data,dev_data,args):
             #         print('train t_k != c_k')
 
             pbar(step, {"loss": loss.item()})
-
         train_loss = total_loss / len(train_dataloader)
 
         # train_corrects = dict(sorted(train_corrects.items(),key= lambda x:x[0]))
@@ -231,10 +241,10 @@ def evaluate(model,dev_data,args):
         dev_pre_totals = {}
         for step, batch in enumerate(tqdm(dev_dataloader, desc='dev iteration:')):
             batch = tuple(t.to(args.device) for t in batch)
-            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bio_labels': batch[3],}
+            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'bio_labels': batch[2],}
             outputs = model(**inputs)
             loss, biesos_logits = outputs[0], outputs[1]
-            # biesos_tags = torch.argmax(biesos_logits, dim=2).cpu().numpy().tolist()
+            biesos_tags = torch.argmax(biesos_logits, dim=2).cpu().numpy().tolist()
             # print('biesos_tags',biesos_tags)
             biesos_tags = np.argmax(biesos_logits.cpu().numpy(), axis=2).tolist()
             # print('biesos_tags', biesos_tags)
@@ -285,12 +295,9 @@ def compute_metrics(bieso_labels,biesos_tags,args):
     corrects = {}
     # for 循环对每一条数据做统计
     for bieso_label, biesos_tag in zip(bieso_labels, biesos_tags):
-        id2label = args.id2label
+        id2label = args.bios_id2label
         bieso_label = [id2label[id] for id in bieso_label]
         biesos_tag = [id2label[id] for id in biesos_tag]
-
-
-
         true_entities = get_entities(bieso_label)
         pre_entities = get_entities(biesos_tag)
 
@@ -331,7 +338,7 @@ def get_entities(bieso_label):
     chunks = []
     chunk = [-1, -1, -1]
     for index,tag in enumerate(bieso_label):
-        if tag.startswith("S-"):
+        if tag.startswith("S_"):
             if chunk[2] != -1:
                 chunks.append(chunk)
             chunk =  [-1, -1, -1]
@@ -340,14 +347,14 @@ def get_entities(bieso_label):
             chunk[0] = tag.split('_')[1]
             chunks.append(chunk)
             chunk = [-1, -1, -1]
-        if tag.startswith("B-"):
+        if tag.startswith("B_"):
             if chunk[2] != -1:
                 chunks.append(chunk)
             chunk = [-1, -1, -1]
             chunk[1] = index
-            chunk[0] = tag.split('-')[1]
-        elif tag.startswith('I-') and chunk[1] != -1:
-            _type = tag.split('-')[1]
+            chunk[0] = tag.split('_')[1]
+        elif tag.startswith('I_') and chunk[1] != -1:
+            _type = tag.split('_')[1]
             if _type == chunk[0]:
                 chunk[2] = index
             if index == len(bieso_label)-1:
@@ -410,87 +417,26 @@ def get_entities(bieso_label):
     return entitys
 
 
-def load_and_cache_examples(args, task, tokenizer, data_type='train'):
-    if args.local_rank not in [-1, 0] and not evaluate:
-        torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
-    processor = processors[task]()
-    # Load data features from cache or dataset file
-    cached_features_file = os.path.join(args.data_dir, 'cached_soft-{}_{}_{}_{}'.format(
-        data_type,
-        list(filter(None, args.bert_model_path.split('/'))).pop(),
-        str(args.train_max_sentence_length if data_type=='train' else args.dev_max_sentence_length),
-        str(task)))
-    if os.path.exists(cached_features_file) :
-        logging.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file)
-    else:
-        logging.info("Creating features from dataset file at %s", args.data_dir)
-        label_list = processor.get_labels()
-        if data_type == 'train':
-            examples = processor.get_train_examples(args.data_dir)
-        elif data_type == 'dev':
-            examples = processor.get_dev_examples(args.data_dir)
-        else:
-            examples = processor.get_test_examples(args.data_dir)
-        features = convert_examples_to_features(examples=examples,
-                                                tokenizer=tokenizer,
-                                                label_list=label_list,
-                                                max_seq_length=args.train_max_sentence_length if data_type=='train' \
-                                                               else args.dev_max_sentence_length,
-                                                cls_token_at_end=bool(args.model_type in ["xlnet"]),
-                                                pad_on_left=bool(args.model_type in ['xlnet']),
-                                                cls_token = tokenizer.cls_token,
-                                                cls_token_segment_id=2 if args.model_type in ["xlnet"] else 0,
-                                                sep_token=tokenizer.sep_token,
-                                                # pad on the left for xlnet
-                                                pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-                                                pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
-                                                )
-        if args.local_rank in [-1, 0]:
-            logging.info("Saving features into cached file %s", cached_features_file)
-            torch.save(features, cached_features_file)
-    if args.local_rank == 0 and not evaluate:
-        torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
-    # Convert to Tensors and build dataset
-    all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
-    all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
-    all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
-    all_label_ids = torch.tensor([f.label_ids for f in features], dtype=torch.long)
-    all_lens = torch.tensor([f.input_len for f in features], dtype=torch.long)
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_lens,all_label_ids)
-    return dataset
-
 def main():
-    args = get_argparse_bert_one_stage().parse_args()
-    args.task_name = 'myner'
-    args.local_rank = -1
-    args.model_type = 'bert'
+    args = get_argparse_bert_one_stage_bk().parse_args()
+    vocab_att_path = args.data_dir + '/vocab_bios_list.txt'
 
+    with open(vocab_att_path, 'r') as f:
+        bios = f.readlines()
+    bios = [ele.strip('\n') for ele in bios]
+    vocab_len = len(bios)
+    print('vocab_len', vocab_len)
     config = BertConfig.from_pretrained(args.bert_model_path)
-    processor = processors[args.task_name]()
-    label_list = processor.get_labels()
-    args.id2label = {i: label for i, label in enumerate(label_list)}
-    args.label2id = {label: i for i, label in enumerate(label_list)}
-    num_labels = len(label_list)
-    config.biso_num_labels = num_labels
-
+    config.biso_num_labels = vocab_len
+    args.bios_id2label = {id: label for id, label in enumerate(bios)}
+    print(args)
 
     print(config)
     model = BertOneStageForNer.from_pretrained(args.bert_model_path, config=config)
-    tokenizer = BertTokenizer.from_pretrained(args.bert_model_path)
-
-
-
-    # train_data = OneStageDataReader(args=args, text_file_name='train_text.txt', bieso_file_name='train_bios.txt', )
-    # dev_data = OneStageDataReader(args=args, text_file_name='dev_text.txt', bieso_file_name='dev_bios.txt', )
-    # test_data = OneStageDataReader(args=args, text_file_name='test_text.txt', bieso_file_name='test_bios.txt', )
-
-
-    train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, data_type='train')
-
-    dev_data = load_and_cache_examples(args, args.task_name, tokenizer, data_type='dev')
-
-    train(model, train_dataset, dev_data, args)
+    train_data = OneStageDataReader(args=args, text_file_name='train_text.txt', bieso_file_name='train_bios.txt', )
+    dev_data = OneStageDataReader(args=args, text_file_name='dev_text.txt', bieso_file_name='dev_bios.txt', )
+    test_data = OneStageDataReader(args=args, text_file_name='test_text.txt', bieso_file_name='test_bios.txt', )
+    train(model, train_data, dev_data, args)
 
 if __name__ == '__main__':
     main()
